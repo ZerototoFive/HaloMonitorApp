@@ -6,10 +6,10 @@
 
 - ✅ **完整硬件监控**: CPU、GPU、内存、网络等硬件信息实时监控
 - ✅ **WebSocket 通信**: 与远程服务器实时数据传输，自动重连
-- ✅ **配置管理**: YAML 配置文件支持，可自定义上报频率
+- ✅ **配置管理**: JSON配置文件支持，可自定义上报频率
 - ✅ **网卡名称优化**: 智能识别网卡类型，解决乱码问题
-- ✅ **高性能**: Rust 异步编程，低资源占用
-- ✅ **跨平台**: Windows 原生支持
+- ✅ **高性能**: C#异步编程，低资源占用
+- ✅ **平台**: Windows 原生支持
 
 ## 📊 性能对比
 
@@ -33,7 +33,7 @@ dotnet publish -c Release -r win-x64 --self-contained true /p:PublishSingleFile=
 
 ## ⚙️ 配置说明
 
-编辑 `config.yaml` 文件：
+编辑 `appsettings.json` 文件：
 
 ```yaml
 {
