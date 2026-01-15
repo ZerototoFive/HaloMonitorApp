@@ -44,9 +44,10 @@ namespace HaloMonitor
                         break;
 
                     case HardwareType.Memory:
+                        if (hw.Name == "Total Memory")
                         envelope.Body.Add(new Dictionary<string, object>
                         {
-                            ["memory"] = MapMemory(hw)
+                            ["Memory"] = MapMemory(hw)
                         });
                         break;
 
@@ -205,11 +206,11 @@ namespace HaloMonitor
                         dto.HotSpotTemp = v.ToString("F1");
                         break;
 
-                    case SensorType.Fan when s.Name == "GPU":
+                    case SensorType.Fan when s.Name.Contains("GPU Fan"):
                         dto.FanSpeed = v;
                         break;
 
-                    case SensorType.Control when s.Name == "GPU Fan":
+                    case SensorType.Control when s.Name.Contains("GPU Fan"):
                         dto.FanLoad = v;
                         break;
 
