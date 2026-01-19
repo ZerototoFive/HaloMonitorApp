@@ -206,7 +206,7 @@ namespace HaloMonitor
                         dto.HotSpotTemp = v.ToString("F1");
                         break;
 
-                    case SensorType.Fan when s.Name.Contains("GPU Fan"):
+                    case SensorType.Fan when s.Name.Contains("GPU Fan")||s.Name.Contains("GPU"):
                         dto.FanSpeed = v;
                         break;
 
