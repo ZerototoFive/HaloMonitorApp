@@ -6,6 +6,7 @@ namespace HaloMonitor
     public class HardwareMonitor
     {
         private readonly Computer _computer;
+        private readonly PerformanceCounterHelper _pcHelper;
 
         public HardwareMonitor()
         {
@@ -19,6 +20,7 @@ namespace HaloMonitor
             };
 
             _computer.Open();
+            _pcHelper = new PerformanceCounterHelper();
         }
 
         public MonitorEnvelopeDto Read()
@@ -32,7 +34,7 @@ namespace HaloMonitor
 
             foreach (var hw in _computer.Hardware)
             {
-                hw.Update();
+                UpdateHardware(hw);
 
                 switch (hw.HardwareType)
                 {
@@ -44,7 +46,8 @@ namespace HaloMonitor
                         break;
 
                     case HardwareType.Memory:
-                        if (hw.Name == "Total Memory")
+                        if (!hw.Name.Contains("Total")) break;
+
                         envelope.Body.Add(new Dictionary<string, object>
                         {
                             ["Memory"] = MapMemory(hw)
@@ -62,19 +65,23 @@ namespace HaloMonitor
 
                     case HardwareType.Network:
                         var net = MapNetwork(hw);
-                        if (net != null && !net.DataDownloaded.Equals("0.00 GB"))
+                        if (net != null && net.DataDownloaded != "0.00 GB")
                             networks.Add(net);
                         break;
+
                     case HardwareType.Storage:
-                        envelope.Body.Add(new Dictionary<string, object>
+                        var storage = MapStorage(hw);
+                        if (storage != null)
                         {
-                            ["Storage"] = MapStorage(hw)
-                        });
+                            envelope.Body.Add(new Dictionary<string, object>
+                            {
+                                ["Storage"] = storage
+                            });
+                        }
                         break;
                 }
             }
 
-            // Network 按顺序追加 Network0 / Network1 ...
             for (int i = 0; i < networks.Count; i++)
             {
                 envelope.Body.Add(new Dictionary<string, object>
@@ -86,8 +93,15 @@ namespace HaloMonitor
             return envelope;
         }
 
-        // ================= CPU =================
+        // ================= 递归 Update =================
+        private void UpdateHardware(IHardware hardware)
+        {
+            hardware.Update();
+            foreach (var sub in hardware.SubHardware)
+                UpdateHardware(sub);
+        }
 
+        // ================= CPU =================
         private CpuDto MapCpu(IHardware hw)
         {
             var dto = new CpuDto
@@ -95,6 +109,42 @@ namespace HaloMonitor
                 CPUInfo = hw.Name
             };
 
+            // CPU Load（优先 PerformanceCounter）
+            try
+            {
+                dto.TotalLoad = _pcHelper.GetCpuUsage().ToString("F1");
+            }
+            catch { }
+
+            ReadCpuRecursive(hw, dto);
+
+            // ===== fallback =====
+            if (dto.CPUPackageTemp == null)
+            {
+                var t = WmiHelper.GetCpuTemperature();
+                if (t != null)
+                    dto.CPUPackageTemp = t.Value.ToString("F1");
+            }
+
+            if (dto.CPUVoltage == null)
+            {
+                var v = WmiHelper.GetCpuVoltage();
+                if (v != null)
+                    dto.CPUVoltage = v.Value.ToString("F3");
+            }
+
+            if (dto.Power == null || dto.Power == "0.00")
+            {
+                var p = WmiHelper.GetCpuPower();
+                if (p != null)
+                    dto.Power = p.Value.ToString("F2");
+            }
+
+            return dto;
+        }
+
+        private void ReadCpuRecursive(IHardware hw, CpuDto dto)
+        {
             foreach (var s in hw.Sensors)
             {
                 if (s.Value == null) continue;
@@ -103,47 +153,41 @@ namespace HaloMonitor
 
                 switch (s.SensorType)
                 {
-                    case SensorType.Load when s.Name == "CPU Total":
-                        dto.TotalLoad = v.ToString("F1");
+                    case SensorType.Temperature:
+                        if (dto.CPUPackageTemp == null &&
+                            (s.Name.Contains("Package") || s.Name.Contains("Tctl") || s.Name.Contains("Die")))
+                        {
+                            dto.CPUPackageTemp = v.ToString("F1");
+                        }
                         break;
 
-                    case SensorType.Temperature when s.Name == "CPU Package":
-                        dto.CPUPackageTemp = v.ToString("F1");
+                    case SensorType.Voltage:
+                        if (dto.CPUVoltage == null && s.Name.Contains("Core"))
+                            dto.CPUVoltage = v.ToString("F3");
                         break;
 
-                    case SensorType.Temperature when s.Name == "Core Average":
-                        dto.CoreAverageTemp = v.ToString("F1");
+                    case SensorType.Power:
+                        if (dto.Power == null && s.Name.Contains("CPU"))
+                            dto.Power = v.ToString("F2");
                         break;
 
-                    case SensorType.Temperature when s.Name == "Core Max":
-                        dto.CoreMaxTemp = v.ToString("F1");
-                        break;
-
-                    case SensorType.Voltage when s.Name == "CPU Core":
-                        dto.CPUVoltage = v.ToString("F3");
-                        break;
-
-                    case SensorType.Power when s.Name == "CPU Cores":
-                        dto.Power = v.ToString("F2");
-                        break;
-
-                    case SensorType.Clock when s.Name.Contains("CPU"):
+                    case SensorType.Clock:
                         dto.Clock[s.Name.Replace(" ", "").Replace("#", "")] =
                             v.ToString("F1");
                         break;
                 }
             }
 
-            return dto;
+            foreach (var sub in hw.SubHardware)
+                ReadCpuRecursive(sub, dto);
         }
 
-        // ================= MEMORY =================
-
+        // ================= Memory =================
         private MemoryDto MapMemory(IHardware hw)
         {
             var dto = new MemoryDto
             {
-                MemoryInfo = hw.Name
+                MemoryInfo = "Generic Memory"
             };
 
             foreach (var s in hw.Sensors)
@@ -152,95 +196,64 @@ namespace HaloMonitor
 
                 var v = s.Value.Value;
 
-                if (s.SensorType == SensorType.Load && s.Name == "Memory")
-                    dto.MemoryLoad = v.ToString("F1");
+                if (s.SensorType == SensorType.Load)
+                    dto.MemoryLoad ??= v.ToString("F1");
 
-                if (s.SensorType == SensorType.Data && s.Name == "Memory Used")
-                    dto.Used = v.ToString("F2");
+                if (s.SensorType == SensorType.Data && s.Name.Contains("Used"))
+                    dto.Used ??= v.ToString("F2");
 
-                if (s.SensorType == SensorType.Data && s.Name == "Memory Available")
-                    dto.Free = v.ToString("F2");
+                if (s.SensorType == SensorType.Data && s.Name.Contains("Available"))
+                    dto.Free ??= v.ToString("F2");
             }
 
             return dto;
         }
 
-        // ================= GPU =================
-
+        // ================= GPU（修复 FanLoad） =================
         private GpuDto MapGpu(IHardware hw)
         {
-            var dto = new GpuDto
-            {
-                GPUInfo = hw.Name
-            };
+            var dto = new GpuDto { GPUInfo = hw.Name };
 
             foreach (var s in hw.Sensors)
             {
                 if (s.Value == null) continue;
-
                 var v = s.Value.Value;
 
-                switch (s.SensorType)
-                {
-                    case SensorType.Load when s.Name == "GPU Core":
-                        dto.GPULoad = v.ToString("F1");
-                        break;
+                if (s.SensorType == SensorType.Load && s.Name.Contains("Core"))
+                    dto.GPULoad ??= v.ToString("F1");
 
-                    case SensorType.Load when s.Name == "GPU Memory":
-                        dto.GPUMemoryLoad = v.ToString("F1");
-                        break;
+                if (s.SensorType == SensorType.Load && s.Name.Contains("Memory"))
+                    dto.GPUMemoryLoad ??= v.ToString("F1");
 
-                    case SensorType.Clock when s.Name == "GPU Core":
-                        dto.GPUCoreClock = v.ToString("F1");
-                        break;
+                if (s.SensorType == SensorType.Clock && s.Name.Contains("Core"))
+                    dto.GPUCoreClock ??= v.ToString("F1");
 
-                    case SensorType.Clock when s.Name == "GPU Memory":
-                        dto.GPUMemoryClock = v.ToString("F1");
-                        break;
-                         
-                    case SensorType.Temperature when s.Name == "GPU Core":
-                        dto.Temp = v.ToString("F1");
-                        break;
+                if (s.SensorType == SensorType.Clock && s.Name.Contains("Memory"))
+                    dto.GPUMemoryClock ??= v.ToString("F1");
 
-                    case SensorType.Temperature when s.Name == "GPU Hot Spot":
-                        dto.HotSpotTemp = v.ToString("F1");
-                        break;
+                if (s.SensorType == SensorType.Temperature)
+                    dto.Temp ??= v.ToString("F1");
 
-                    case SensorType.Fan when s.Name.Contains("GPU Fan")||s.Name.Contains("GPU"):
-                        dto.FanSpeed = v;
-                        break;
+                if (s.SensorType == SensorType.Fan)
+                    dto.FanSpeed ??= v;
 
-                    case SensorType.Control when s.Name.Contains("GPU Fan"):
-                        dto.FanLoad = v;
-                        break;
+                if (s.SensorType == SensorType.Control && s.Name.Contains("Fan"))
+                    dto.FanLoad ??= v;
+            }
 
-                    case SensorType.SmallData when s.Name == "GPU Memory Total":
-                        dto.GPUMemoryTotal = v;
-                        break;
-
-                    case SensorType.SmallData when s.Name == "GPU Memory Free":
-                        dto.GPUMemoryFree = v;
-                        break;
-
-                    case SensorType.SmallData when s.Name == "GPU Memory Used":
-                        dto.GPUMemoryUsed = v;
-                        break;
-
-                }
+            // fallback：用转速估算 FanLoad
+            if (dto.FanLoad == null && dto.FanSpeed != null)
+            {
+                dto.FanLoad = Math.Min(100, dto.FanSpeed.Value / 30.0);
             }
 
             return dto;
         }
 
-        // ================= NETWORK =================
-
+        // ================= Network =================
         private NetworkDto? MapNetwork(IHardware hw)
         {
-            var dto = new NetworkDto
-            {
-                NetworkInfo = hw.Name
-            };
-
+            var dto = new NetworkDto { NetworkInfo = hw.Name };
             bool hasData = false;
 
             foreach (var s in hw.Sensors)
@@ -259,16 +272,9 @@ namespace HaloMonitor
                     hasData = true;
                 }
 
-
                 if (s.SensorType == SensorType.Data && s.Name.Contains("Downloaded"))
                 {
                     dto.DataDownloaded = FormatGB(s.Value.Value);
-                    hasData = true;
-                }
-
-                if (s.SensorType == SensorType.Data && s.Name.Contains("Uploaded"))
-                {
-                    dto.DataUploaded = FormatGB(s.Value.Value);
                     hasData = true;
                 }
             }
@@ -276,13 +282,15 @@ namespace HaloMonitor
             return hasData ? dto : null;
         }
 
-        //=============== Storage ===================
-        private StorageDto MapStorage(IHardware hw)
+        // ================= Storage（过滤垃圾数据） =================
+        private StorageDto? MapStorage(IHardware hw)
         {
             var dto = new StorageDto
             {
                 DiskInfo = hw.Name
             };
+
+            bool hasValidData = false;
 
             foreach (var s in hw.Sensors)
             {
@@ -290,37 +298,42 @@ namespace HaloMonitor
 
                 var v = s.Value.Value;
 
-                switch (s.SensorType)
+                if (s.SensorType == SensorType.Temperature)
+                    dto.Temp ??= v.ToString("F1");
+
+                if (s.SensorType == SensorType.Load && s.Name.Contains("Used"))
                 {
-                    case SensorType.Temperature:
-                        dto.Temp = v.ToString("F1");
-                        break;
+                    dto.UsedPercent = v.ToString("F1");
+                    hasValidData = true;
+                }
 
-                    case SensorType.Load when s.Name.Contains("Used Space"):
-                        dto.UsedPercent = v.ToString("F1");
-                        break;
+                if (s.SensorType == SensorType.Data && s.Name.Contains("Read"))
+                {
+                    dto.Read = FormatGB(v);
+                    hasValidData = true;
+                }
 
-                    case SensorType.Data when s.Name.Contains("Read"):
-                        dto.Read = FormatGB(v);
-                        break;
+                if (s.SensorType == SensorType.Data && s.Name.Contains("Written"))
+                {
+                    dto.Written = FormatGB(v);
+                    hasValidData = true;
+                }
 
-                    case SensorType.Data when s.Name.Contains("Written"):
-                        dto.Written = FormatGB(v);
-                        break;
+                if (s.SensorType == SensorType.Throughput && s.Name.Contains("Read"))
+                {
+                    dto.ReadSpeed = FormatSpeed(v);
+                    hasValidData = true;
+                }
 
-                    case SensorType.Throughput when s.Name.Contains("Read"):
-                        dto.ReadSpeed = FormatSpeed(v);
-                        break;
-
-                    case SensorType.Throughput when s.Name.Contains("Write"):
-                        dto.WriteSpeed = FormatSpeed(v);
-                        break;
+                if (s.SensorType == SensorType.Throughput && s.Name.Contains("Write"))
+                {
+                    dto.WriteSpeed = FormatSpeed(v);
+                    hasValidData = true;
                 }
             }
 
-            return dto;
+            return hasValidData ? dto : null;
         }
-
 
         private static string FormatSpeed(double bytesPerSec)
         {
