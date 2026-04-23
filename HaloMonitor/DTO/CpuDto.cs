@@ -3,13 +3,14 @@
     public class CpuDto
     {
         public string? CPUInfo { get; set; }
-        public string? TotalLoad { get; set; }
-        public string? CPUPackageTemp { get; set; }
-        public string? CoreAverageTemp { get; set; }
-        public string? CoreMaxTemp { get; set; }
-        public string? CPUVoltage { get; set; }
-        public string? Power { get; set; }
 
-        public Dictionary<string, string> Clock { get; set; } = new();
+        public double? TotalLoad { get; set; }
+        public double? CPUPackageTemp { get; set; }
+        public double? CoreAverageTemp { get; set; }
+        public double? CoreMaxTemp { get; set; }
+        public double? CPUVoltage { get; set; }
+        public double? Power { get; set; }
+
+        public Dictionary<string, double> Clock { get; set; } = new();
     }
 }

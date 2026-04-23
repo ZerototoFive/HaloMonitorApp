@@ -1,10 +1,11 @@
 ﻿namespace HaloMonitor.DTO
 {
-    internal class MemoryDto
+    public class MemoryDto
     {
         public string? MemoryInfo { get; set; }
-        public string? MemoryLoad { get; set; }
-        public string? Used { get; set; }
-        public string? Free { get; set; }
+
+        public double? MemoryLoad { get; set; }
+        public double? Used { get; set; }   // GB
+        public double? Free { get; set; }   // GB
     }
 }

@@ -6,7 +6,6 @@ namespace HaloMonitor
     public class HardwareMonitor
     {
         private readonly Computer _computer;
-        private readonly PerformanceCounterHelper _pcHelper;
 
         public HardwareMonitor()
         {
@@ -20,7 +19,6 @@ namespace HaloMonitor
             };
 
             _computer.Open();
-            _pcHelper = new PerformanceCounterHelper();
         }
 
         public MonitorEnvelopeDto Read()
@@ -34,7 +32,7 @@ namespace HaloMonitor
 
             foreach (var hw in _computer.Hardware)
             {
-                UpdateHardware(hw);
+                Update(hw);
 
                 switch (hw.HardwareType)
                 {
@@ -54,8 +52,8 @@ namespace HaloMonitor
                         });
                         break;
 
-                    case HardwareType.GpuAmd:
                     case HardwareType.GpuNvidia:
+                    case HardwareType.GpuAmd:
                     case HardwareType.GpuIntel:
                         envelope.Body.Add(new Dictionary<string, object>
                         {
@@ -65,17 +63,17 @@ namespace HaloMonitor
 
                     case HardwareType.Network:
                         var net = MapNetwork(hw);
-                        if (net != null && net.DataDownloaded != "0.00 GB")
+                        if (net != null)
                             networks.Add(net);
                         break;
 
                     case HardwareType.Storage:
-                        var storage = MapStorage(hw);
-                        if (storage != null)
+                        var disk = MapStorage(hw);
+                        if (disk != null)
                         {
                             envelope.Body.Add(new Dictionary<string, object>
                             {
-                                ["Storage"] = storage
+                                ["Storage"] = disk
                             });
                         }
                         break;
@@ -93,93 +91,69 @@ namespace HaloMonitor
             return envelope;
         }
 
-        // ================= 递归 Update =================
-        private void UpdateHardware(IHardware hardware)
+        private void Update(IHardware hw)
         {
-            hardware.Update();
-            foreach (var sub in hardware.SubHardware)
-                UpdateHardware(sub);
+            hw.Update();
+            foreach (var sub in hw.SubHardware)
+                Update(sub);
         }
 
-        // ================= CPU =================
+        private static double Round0(double v) => Math.Round(v, 0, MidpointRounding.AwayFromZero);
+        private static double Round2(double v) => Math.Round(v, 2, MidpointRounding.AwayFromZero);
+
+        // ================= CPU（已增强） =================
         private CpuDto MapCpu(IHardware hw)
         {
-            var dto = new CpuDto
-            {
-                CPUInfo = hw.Name
-            };
+            var dto = new CpuDto { CPUInfo = hw.Name };
 
-            // CPU Load（优先 PerformanceCounter）
-            try
-            {
-                dto.TotalLoad = _pcHelper.GetCpuUsage().ToString("F1");
-            }
-            catch { }
-
-            ReadCpuRecursive(hw, dto);
-
-            // ===== fallback =====
-            if (dto.CPUPackageTemp == null)
-            {
-                var t = WmiHelper.GetCpuTemperature();
-                if (t != null)
-                    dto.CPUPackageTemp = t.Value.ToString("F1");
-            }
-
-            if (dto.CPUVoltage == null)
-            {
-                var v = WmiHelper.GetCpuVoltage();
-                if (v != null)
-                    dto.CPUVoltage = v.Value.ToString("F3");
-            }
-
-            if (dto.Power == null || dto.Power == "0.00")
-            {
-                var p = WmiHelper.GetCpuPower();
-                if (p != null)
-                    dto.Power = p.Value.ToString("F2");
-            }
-
-            return dto;
-        }
-
-        private void ReadCpuRecursive(IHardware hw, CpuDto dto)
-        {
             foreach (var s in hw.Sensors)
             {
                 if (s.Value == null) continue;
-
                 var v = s.Value.Value;
 
-                switch (s.SensorType)
+                // ===== Load =====
+                if (s.SensorType == SensorType.Load && s.Name.Contains("Total"))
+                    dto.TotalLoad = Round0(v);
+
+                // ===== Temp =====
+                if (s.SensorType == SensorType.Temperature && s.Name.Contains("Package"))
+                    dto.CPUPackageTemp ??= Round0(v);
+
+                if (s.SensorType == SensorType.Temperature && s.Name.Contains("Core Average"))
+                    dto.CoreAverageTemp ??= Round0(v);
+
+                if (s.SensorType == SensorType.Temperature && s.Name.Contains("Core Max"))
+                    dto.CoreMaxTemp ??= Round0(v);
+
+                // ===== Voltage =====
+                if (s.SensorType == SensorType.Voltage && s.Name.Contains("Core"))
+                    dto.CPUVoltage ??= Round2(v);
+
+                // ===== Power =====
+                if (s.SensorType == SensorType.Power && s.Name.Contains("CPU"))
+                    dto.Power ??= Round0(v);
+
+                // ===== Clock（关键修复）=====
+                if (s.SensorType == SensorType.Clock)
                 {
-                    case SensorType.Temperature:
-                        if (dto.CPUPackageTemp == null &&
-                            (s.Name.Contains("Package") || s.Name.Contains("Tctl") || s.Name.Contains("Die")))
-                        {
-                            dto.CPUPackageTemp = v.ToString("F1");
-                        }
-                        break;
+                    var name = s.Name;
 
-                    case SensorType.Voltage:
-                        if (dto.CPUVoltage == null && s.Name.Contains("Core"))
-                            dto.CPUVoltage = v.ToString("F3");
-                        break;
+                    // 兼容 Intel 12代 / AMD / 旧CPU
+                    if (name.Contains("Core") || name.Contains("CPU") || name.Contains("Bus"))
+                    {
+                        var key = name
+                            .Replace(" ", "")
+                            .Replace("#", "")
+                            .Replace("Core", "Core")
+                            .Replace("P-Core", "PCore")
+                            .Replace("E-Core", "ECore");
 
-                    case SensorType.Power:
-                        if (dto.Power == null && s.Name.Contains("CPU"))
-                            dto.Power = v.ToString("F2");
-                        break;
-
-                    case SensorType.Clock:
-                        dto.Clock[s.Name.Replace(" ", "").Replace("#", "")] =
-                            v.ToString("F1");
-                        break;
+                        dto.Clock[key] = Round2(v);
+                    }
                 }
             }
 
-            foreach (var sub in hw.SubHardware)
-                ReadCpuRecursive(sub, dto);
+            return dto;
         }
 
         // ================= Memory =================
@@ -193,23 +167,22 @@ namespace HaloMonitor
             foreach (var s in hw.Sensors)
             {
                 if (s.Value == null) continue;
-
                 var v = s.Value.Value;
 
                 if (s.SensorType == SensorType.Load)
-                    dto.MemoryLoad ??= v.ToString("F1");
+                    dto.MemoryLoad = Round2(v);
 
                 if (s.SensorType == SensorType.Data && s.Name.Contains("Used"))
-                    dto.Used ??= v.ToString("F2");
+                    dto.Used = Round2(v);
 
                 if (s.SensorType == SensorType.Data && s.Name.Contains("Available"))
-                    dto.Free ??= v.ToString("F2");
+                    dto.Free = Round2(v);
             }
 
             return dto;
         }
 
-        // ================= GPU（修复 FanLoad） =================
+        // ================= GPU =================
         private GpuDto MapGpu(IHardware hw)
         {
             var dto = new GpuDto { GPUInfo = hw.Name };
@@ -220,134 +193,146 @@ namespace HaloMonitor
                 var v = s.Value.Value;
 
                 if (s.SensorType == SensorType.Load && s.Name.Contains("Core"))
-                    dto.GPULoad ??= v.ToString("F1");
+                    dto.GPULoad = Round0(v);
 
                 if (s.SensorType == SensorType.Load && s.Name.Contains("Memory"))
-                    dto.GPUMemoryLoad ??= v.ToString("F1");
+                    dto.GPUMemoryLoad = Round2(v);
 
                 if (s.SensorType == SensorType.Clock && s.Name.Contains("Core"))
-                    dto.GPUCoreClock ??= v.ToString("F1");
+                    dto.GPUCoreClock = Round0(v);
 
                 if (s.SensorType == SensorType.Clock && s.Name.Contains("Memory"))
-                    dto.GPUMemoryClock ??= v.ToString("F1");
+                    dto.GPUMemoryClock = Round0(v);
 
                 if (s.SensorType == SensorType.Temperature)
-                    dto.Temp ??= v.ToString("F1");
+                    dto.Temp ??= Round0(v);
+
+                if (s.SensorType == SensorType.Temperature && s.Name.Contains("Hot Spot"))
+                    dto.HotSpotTemp ??= Round0(v);
 
                 if (s.SensorType == SensorType.Fan)
-                    dto.FanSpeed ??= v;
+                    dto.FanSpeed ??= Round0(v);
 
-                if (s.SensorType == SensorType.Control && s.Name.Contains("Fan"))
-                    dto.FanLoad ??= v;
-            }
+                if (s.SensorType == SensorType.Control)
+                    dto.FanLoad ??= Round0(v);
 
-            // fallback：用转速估算 FanLoad
-            if (dto.FanLoad == null && dto.FanSpeed != null)
-            {
-                dto.FanLoad = Math.Min(100, dto.FanSpeed.Value / 30.0);
+                if (s.SensorType == SensorType.SmallData && s.Name.Contains("Total"))
+                    dto.GPUMemoryTotal ??= Round0(v);
+
+                if (s.SensorType == SensorType.SmallData && s.Name.Contains("Free"))
+                    dto.GPUMemoryFree ??= Round0(v);
+
+                if (s.SensorType == SensorType.SmallData && s.Name.Contains("Used"))
+                    dto.GPUMemoryUsed ??= Round0(v);
             }
 
             return dto;
         }
 
-        // ================= Network =================
+        // ================= Network（🔥过滤优化） =================
         private NetworkDto? MapNetwork(IHardware hw)
         {
+            // ❌ 过滤虚拟网卡
+            if (hw.Name.Contains("本地连接*") || hw.Name.Contains("Local"))
+                return null;
+
             var dto = new NetworkDto { NetworkInfo = hw.Name };
-            bool hasData = false;
+            bool hasTraffic = false;
+
+            double downSpeed = 0;
+            double upSpeed = 0;
+            double downloaded = 0;
+            double uploaded = 0;
 
             foreach (var s in hw.Sensors)
             {
                 if (s.Value == null) continue;
+                var v = s.Value.Value;
 
                 if (s.SensorType == SensorType.Throughput && s.Name.Contains("Download"))
                 {
-                    dto.DownloadSpeed = FormatSpeed(s.Value.Value);
-                    hasData = true;
+                    downSpeed = Round2(v / 1024.0);
                 }
 
                 if (s.SensorType == SensorType.Throughput && s.Name.Contains("Upload"))
                 {
-                    dto.UploadSpeed = FormatSpeed(s.Value.Value);
-                    hasData = true;
+                    upSpeed = Round2(v / 1024.0);
                 }
 
                 if (s.SensorType == SensorType.Data && s.Name.Contains("Downloaded"))
                 {
-                    dto.DataDownloaded = FormatGB(s.Value.Value);
-                    hasData = true;
+                    downloaded = Round2(v);
+                }
+
+                if (s.SensorType == SensorType.Data && s.Name.Contains("Uploaded"))
+                {
+                    uploaded = Round2(v);
                 }
             }
 
-            return hasData ? dto : null;
+            // ✅ 关键过滤逻辑
+            if (downSpeed > 0 || upSpeed > 0 || downloaded > 0 || uploaded > 0)
+            {
+                hasTraffic = true;
+            }
+
+            if (!hasTraffic)
+                return null;
+
+            dto.DownloadSpeed = downSpeed;
+            dto.UploadSpeed = upSpeed;
+            dto.DataDownloaded = downloaded;
+            dto.DataUploaded = uploaded;
+
+            return dto;
         }
 
-        // ================= Storage（过滤垃圾数据） =================
+        // ================= Storage =================
         private StorageDto? MapStorage(IHardware hw)
         {
-            var dto = new StorageDto
-            {
-                DiskInfo = hw.Name
-            };
-
-            bool hasValidData = false;
+            var dto = new StorageDto { DiskInfo = hw.Name };
+            bool has = false;
 
             foreach (var s in hw.Sensors)
             {
                 if (s.Value == null) continue;
-
                 var v = s.Value.Value;
 
                 if (s.SensorType == SensorType.Temperature)
-                    dto.Temp ??= v.ToString("F1");
+                    dto.Temp ??= Round0(v);
 
                 if (s.SensorType == SensorType.Load && s.Name.Contains("Used"))
                 {
-                    dto.UsedPercent = v.ToString("F1");
-                    hasValidData = true;
+                    dto.UsedPercent = Round2(v);
+                    has = true;
                 }
 
                 if (s.SensorType == SensorType.Data && s.Name.Contains("Read"))
                 {
-                    dto.Read = FormatGB(v);
-                    hasValidData = true;
+                    dto.Read = Round0(v);
+                    has = true;
                 }
 
                 if (s.SensorType == SensorType.Data && s.Name.Contains("Written"))
                 {
-                    dto.Written = FormatGB(v);
-                    hasValidData = true;
+                    dto.Written = Round0(v);
+                    has = true;
                 }
 
                 if (s.SensorType == SensorType.Throughput && s.Name.Contains("Read"))
                 {
-                    dto.ReadSpeed = FormatSpeed(v);
-                    hasValidData = true;
+                    dto.ReadSpeed = Round0(v / 1024.0);
+                    has = true;
                 }
 
                 if (s.SensorType == SensorType.Throughput && s.Name.Contains("Write"))
                 {
-                    dto.WriteSpeed = FormatSpeed(v);
-                    hasValidData = true;
+                    dto.WriteSpeed = Round0(v / 1024.0);
+                    has = true;
                 }
             }
 
-            return hasValidData ? dto : null;
-        }
-
-        private static string FormatSpeed(double bytesPerSec)
-        {
-            var kb = bytesPerSec / 1024.0;
-            return kb < 1024
-                ? $"{kb:F1} Kb/s"
-                : $"{(kb / 1024):F1} Mb/s";
-        }
-
-        private string FormatGB(double value)
-        {
-            return value >= 1024
-                ? $"{value / 1024:F2} TB"
-                : $"{value:F2} GB";
+            return has ? dto : null;
         }
     }
 }

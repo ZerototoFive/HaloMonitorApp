@@ -1,20 +1,16 @@
-﻿
-namespace HaloMonitor.DTO
+﻿namespace HaloMonitor.DTO
 {
-    internal class StorageDto
+    public class StorageDto
     {
         public string DiskInfo { get; set; } = string.Empty;
 
-        public string? Temp { get; set; }
+        public double? Temp { get; set; }
+        public double? UsedPercent { get; set; }
 
-        public string? UsedPercent { get; set; }
+        public double? Read { get; set; }     // GB / TB 统一数值（单位前端处理）
+        public double? Written { get; set; }
 
-        public string? Read { get; set; }
-
-        public string? Written { get; set; }
-
-        public string? ReadSpeed { get; set; }
-
-        public string? WriteSpeed { get; set; }
+        public double? ReadSpeed { get; set; }   // KB/s
+        public double? WriteSpeed { get; set; }
     }
 }

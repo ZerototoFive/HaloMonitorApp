@@ -1,14 +1,13 @@
-﻿using System;
-using System.Collections.Generic;
-
-namespace HaloMonitor.DTO
+﻿namespace HaloMonitor.DTO
 {
-    internal class NetworkDto
+    public class NetworkDto
     {
         public string? NetworkInfo { get; set; }
-        public string? DataDownloaded { get; set; }
-        public string? DataUploaded { get; set; }
-        public string? DownloadSpeed { get; set; }
-        public string? UploadSpeed { get; set; }
+
+        public double? DataDownloaded { get; set; } // GB
+        public double? DataUploaded { get; set; }
+
+        public double? DownloadSpeed { get; set; } // KB/s
+        public double? UploadSpeed { get; set; }
     }
 }
