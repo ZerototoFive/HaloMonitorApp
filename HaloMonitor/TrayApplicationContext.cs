@@ -1,6 +1,5 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace HaloMonitor
 {
@@ -8,6 +7,7 @@ namespace HaloMonitor
     {
         private readonly NotifyIcon _trayIcon;
         private readonly CancellationTokenSource _cts = new();
+        private Task? _backgroundTask;
 
         public TrayApplicationContext()
         {
@@ -42,12 +42,22 @@ namespace HaloMonitor
             _cts.Cancel();
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
+
+            try
+            {
+                _backgroundTask?.Wait(TimeSpan.FromSeconds(2));
+            }
+            catch
+            {
+                // swallow
+            }
+
             ExitThread();
         }
 
         private void StartBackgroundAsync()
         {
-            Task.Run(async () =>
+            _backgroundTask = Task.Run(async () =>
             {
                 try
                 {
@@ -65,12 +75,6 @@ namespace HaloMonitor
                     // === 核心服务 ===
                     services.AddSingleton<HardwareMonitor>();
                     services.AddSingleton<MonitorWebSocketClient>();
-
-                    // === 日志（可选，先不输出到 console） ===
-                    services.AddLogging(b =>
-                    {
-                        b.SetMinimumLevel(LogLevel.Information);
-                    });
 
                     using var sp = services.BuildServiceProvider();
 

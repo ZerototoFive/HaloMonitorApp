@@ -1,9 +1,8 @@
-﻿using HaloMonitor;
-using Microsoft.Extensions.Logging;
+using HaloMonitor;
 using Microsoft.Extensions.Options;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
+
 public sealed class MonitorWebSocketClient : IAsyncDisposable
 {
     private readonly string _deviceId;
@@ -11,23 +10,20 @@ public sealed class MonitorWebSocketClient : IAsyncDisposable
     private readonly TimeSpan _reconnectDelay;
     private readonly TimeSpan _reportInterval;
     private readonly HardwareMonitor _monitor;
-    private readonly ILogger<MonitorWebSocketClient> _logger;
     private ClientWebSocket? _ws;
 
     public MonitorWebSocketClient(
         IOptions<MonitorConfig> options,
-        HardwareMonitor monitor,
-        ILogger<MonitorWebSocketClient> logger)
+        HardwareMonitor monitor)
     {
         var cfg = options.Value;
 
         _deviceId = cfg.DeviceId;
         _serverUri = new Uri(cfg.Url);
-        _reconnectDelay = TimeSpan.FromSeconds(cfg.ReconnectSeconds);
+        _reconnectDelay = TimeSpan.FromSeconds(cfg.ReconnectDelaySeconds);
         _reportInterval = TimeSpan.FromSeconds(cfg.ReportIntervalSeconds);
 
         _monitor = monitor;
-        _logger = logger;
     }
 
     public async Task RunAsync(CancellationToken token)
@@ -36,18 +32,15 @@ public sealed class MonitorWebSocketClient : IAsyncDisposable
         {
             try
             {
-                _logger.LogInformation("Connecting to WebSocket: {Url}", _serverUri);
                 await ConnectAndSendAsync(token);
-                _logger.LogInformation("WebSocket connected");
-
             }
             catch (OperationCanceledException)
             {
                 break;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                _logger.LogWarning("WebSocket send failed: {Message}", ex.Message);
+                // 日志记录已关闭，静默重试
             }
 
             await Task.Delay(_reconnectDelay, token);
@@ -67,8 +60,7 @@ public sealed class MonitorWebSocketClient : IAsyncDisposable
                 var payload = _monitor.Read();
                 payload.DeviceId = _deviceId;
 
-                var json = JsonSerializer.Serialize(payload);
-                var buffer = Encoding.UTF8.GetBytes(json);
+                byte[] buffer = JsonSerializer.SerializeToUtf8Bytes(payload);
 
                 await _ws.SendAsync(
                     buffer,
