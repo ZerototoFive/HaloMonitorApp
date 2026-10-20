@@ -1,6 +1,7 @@
 using HaloMonitor;
 using Microsoft.Extensions.Options;
 using System.Net.WebSockets;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 public sealed class MonitorWebSocketClient : IAsyncDisposable
@@ -11,6 +12,11 @@ public sealed class MonitorWebSocketClient : IAsyncDisposable
     private readonly TimeSpan _reportInterval;
     private readonly HardwareMonitor _monitor;
     private ClientWebSocket? _ws;
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
 
     public MonitorWebSocketClient(
         IOptions<MonitorConfig> options,
@@ -60,7 +66,7 @@ public sealed class MonitorWebSocketClient : IAsyncDisposable
                 var payload = _monitor.Read();
                 payload.DeviceId = _deviceId;
 
-                byte[] buffer = JsonSerializer.SerializeToUtf8Bytes(payload);
+                byte[] buffer = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
 
                 await _ws.SendAsync(
                     buffer,
